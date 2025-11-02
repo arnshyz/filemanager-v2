@@ -89,6 +89,17 @@ app.post('/api/auth/login', (req, res) => {
   req.session.user = { username };
   res.json({ ok: true, user: { username } });
 });
+app.post('/api/auth/guest', (req, res) => {
+  req.session.regenerate(err => {
+    if (err) {
+      console.error('Failed to create guest session', err);
+      return res.status(500).json({ error: 'guest session unavailable' });
+    }
+    const user = { username: 'tamu', role: 'guest' };
+    req.session.user = user;
+    res.json({ ok: true, user });
+  });
+});
 app.post('/api/auth/logout', (req, res) => { req.session.destroy(() => res.json({ ok: true })); });
 app.get('/api/auth/me', (req, res) => res.json({ user: req.session?.user || null }));
 

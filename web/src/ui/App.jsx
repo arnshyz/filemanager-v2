@@ -6,13 +6,26 @@ import { Card } from './components/card'
 
 const apiFetch = async (url, opts={})=>{
   const res = await fetch(url, { credentials:'include', ...opts });
-  if (res.status===401) throw new Error('unauthorized');
-  return res;
+  if (res.ok) return res;
+  let message = res.status === 401 ? 'unauthorized' : 'request failed';
+  try {
+    const data = await res.clone().json();
+    if (data?.error) message = data.error;
+  } catch {
+    try {
+      const text = await res.text();
+      if (text) message = text;
+    } catch {}
+  }
+  const error = new Error(message || 'request failed');
+  error.status = res.status;
+  throw error;
 };
 
 const api = {
   me: async ()=> (await apiFetch('/api/auth/me')).json(),
   login: async (username,password)=> (await apiFetch('/api/auth/login',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({username,password})})).json(),
+  guest: async ()=> (await apiFetch('/api/auth/guest',{ method:'POST' })).json(),
   logout: async ()=> (await apiFetch('/api/auth/logout',{ method:'POST'})).json(),
   list: async (p='/', sort='name', dir='asc' ) => (await apiFetch(`/api/files?path=${encodeURIComponent(p)}&sort=${sort}&dir=${dir}`)).json(),
   upload: async (files, folder='/uploads') => {
@@ -98,9 +111,26 @@ function Login({onLogged}){
           {err && <div className="text-red-400 text-sm">{err}</div>}
           <Button onClick={async ()=>{
             setErr('');
-            try{ const res = await api.login(u,p); onLogged(res.user); }
-            catch(e){ setErr('Gagal login'); }
+            try{
+              const res = await api.login(u,p);
+              onLogged(res.user);
+            }
+            catch(e){
+              const msg = (e?.status === 401 || e?.message === 'unauthorized') ? 'Kredensial salah' : (e?.message || 'Gagal login');
+              setErr(msg);
+            }
           }}>Masuk</Button>
+          <Button variant="ghost" onClick={async ()=>{
+            setErr('');
+            try{
+              const res = await api.guest();
+              onLogged(res.user);
+            }
+            catch(e){
+              const msg = (e?.message && e.message !== 'unauthorized') ? e.message : 'Tidak dapat masuk sebagai tamu';
+              setErr(msg);
+            }
+          }}>Masuk sebagai Tamu</Button>
         </div>
       </Card>
     </div>
