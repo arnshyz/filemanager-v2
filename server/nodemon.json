@@ -1,0 +1,6 @@
+
+{
+  "ignore": ["web/*","data/*"],
+  "ext": "js,mjs",
+  "execMap": { "js": "node --trace-warnings" }
+}

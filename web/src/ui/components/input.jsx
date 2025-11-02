@@ -1,0 +1,1 @@
+export function Input(props){ return <input className={'bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 w-full '+(props.className||'')} {...props}/> }

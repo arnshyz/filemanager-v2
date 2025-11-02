@@ -1,0 +1,13 @@
+{
+  "name": "telefile-manager-v2",
+  "private": true,
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w server",
+    "build": "npm run build -w web",
+    "start": "npm run start -w server"
+  }
+}

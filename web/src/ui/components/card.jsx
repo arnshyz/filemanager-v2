@@ -1,0 +1,1 @@
+export function Card({className='',...props}){ return <div className={'card p-4 '+className} {...props}/> }
