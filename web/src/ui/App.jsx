@@ -13,6 +13,7 @@ const apiFetch = async (url, opts={})=>{
 const api = {
   me: async ()=> (await apiFetch('/api/auth/me')).json(),
   login: async (username,password)=> (await apiFetch('/api/auth/login',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({username,password})})).json(),
+  guest: async ()=> (await apiFetch('/api/auth/guest',{ method:'POST' })).json(),
   logout: async ()=> (await apiFetch('/api/auth/logout',{ method:'POST'})).json(),
   list: async (p='/', sort='name', dir='asc' ) => (await apiFetch(`/api/files?path=${encodeURIComponent(p)}&sort=${sort}&dir=${dir}`)).json(),
   upload: async (files, folder='/uploads') => {
@@ -101,6 +102,11 @@ function Login({onLogged}){
             try{ const res = await api.login(u,p); onLogged(res.user); }
             catch(e){ setErr('Gagal login'); }
           }}>Masuk</Button>
+          <Button variant="ghost" onClick={async ()=>{
+            setErr('');
+            try{ const res = await api.guest(); onLogged(res.user); }
+            catch(e){ setErr('Tidak dapat masuk sebagai tamu'); }
+          }}>Masuk sebagai Tamu</Button>
         </div>
       </Card>
     </div>
