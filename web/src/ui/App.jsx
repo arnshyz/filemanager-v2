@@ -4,22 +4,57 @@ import { Button } from './components/button'
 import { Input } from './components/input'
 import { Card } from './components/card'
 
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+const DATA_BASE = (import.meta.env.VITE_DATA_BASE_URL || API_BASE).replace(/\/$/, '');
+const resolveUrl = (base, url) => {
+  if (!url) return url;
+  if (/^https?:/i.test(url)) return url;
+  const prefix = base ? base : '';
+  const needsSlash = url.startsWith('/') || !prefix;
+  return needsSlash ? `${prefix}${url}` : `${prefix}/${url}`;
+};
+
 const apiFetch = async (url, opts={})=>{
-  const res = await fetch(url, { credentials:'include', ...opts });
-  if (res.status===401) throw new Error('unauthorized');
-  return res;
+  const target = resolveUrl(API_BASE, url);
+  const res = await fetch(target, { credentials:'include', ...opts });
+  if (res.ok) return res;
+  let message = res.status === 401 ? 'unauthorized' : 'request failed';
+  try {
+    const data = await res.clone().json();
+    if (data?.error) message = data.error;
+  } catch {
+    try {
+      const text = await res.text();
+      if (text) message = text;
+    } catch {}
+  }
+  const error = new Error(message || 'request failed');
+  error.status = res.status;
+  throw error;
 };
 
 const api = {
   me: async ()=> (await apiFetch('/api/auth/me')).json(),
   login: async (username,password)=> (await apiFetch('/api/auth/login',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({username,password})})).json(),
+  guest: async ()=> (await apiFetch('/api/auth/guest',{ method:'POST' })).json(),
   logout: async ()=> (await apiFetch('/api/auth/logout',{ method:'POST'})).json(),
-  list: async (p='/', sort='name', dir='asc' ) => (await apiFetch(`/api/files?path=${encodeURIComponent(p)}&sort=${sort}&dir=${dir}`)).json(),
+  list: async (p='/', sort='name', dir='asc' ) => {
+    const res = await apiFetch(`/api/files?path=${encodeURIComponent(p)}&sort=${sort}&dir=${dir}`);
+    const data = await res.json();
+    if (Array.isArray(data?.items)) {
+      data.items = data.items.map(item => item?.url ? { ...item, url: resolveUrl(DATA_BASE, item.url) } : item);
+    }
+    return data;
+  },
   upload: async (files, folder='/uploads') => {
     const fd = new FormData();
     [...files].forEach(f => fd.append('files', f));
     const res = await apiFetch(`/api/upload?path=${encodeURIComponent(folder)}`, { method:'POST', body: fd });
-    return res.json();
+    const data = await res.json();
+    if (Array.isArray(data?.files)) {
+      data.files = data.files.map(file => file?.url ? { ...file, url: resolveUrl(DATA_BASE, file.url) } : file);
+    }
+    return data;
   },
   mkfolder: async (basePath, name) => {
     const res = await apiFetch(`/api/folder`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ path: basePath, name }) });
@@ -36,8 +71,27 @@ const api = {
 function useAuth(){
   const [user,setUser] = useState(null);
   const [ready,setReady] = useState(false);
-  useEffect(()=>{ api.me().then(d=>{ setUser(d.user); setReady(true) }).catch(()=> setReady(true)); },[]);
-  return { user, setUser, ready };
+  const [error,setError] = useState('');
+  useEffect(()=>{
+    let cancelled = false;
+    (async ()=>{
+      try {
+        const data = await api.me();
+        if (!cancelled) setUser(data.user);
+      } catch (err) {
+        try {
+          const guest = await api.guest();
+          if (!cancelled) setUser(guest.user);
+        } catch (guestErr) {
+          if (!cancelled) setError(guestErr?.message || 'Tidak dapat masuk.');
+        }
+      } finally {
+        if (!cancelled) setReady(true);
+      }
+    })();
+    return ()=>{ cancelled = true };
+  },[]);
+  return { user, ready, error };
 }
 
 const FileIcon = ({mime,isDir}) => {
@@ -83,32 +137,8 @@ const Preview = ({file}) => {
   return <a className="btn btn-primary inline-block" href={url} download>Download</a>
 }
 
-function Login({onLogged}){
-  const [u,setU] = useState('admin');
-  const [p,setP] = useState('admin12345');
-  const [err,setErr] = useState('');
-  return (
-    <div className="min-h-screen grid place-content-center">
-      <Card className="w-[380px]">
-        <div className="text-xl font-bold mb-2">Masuk</div>
-        <div className="text-sm text-neutral-400 mb-4">Gunakan kredensial admin dari .env</div>
-        <div className="space-y-3">
-          <Input value={u} onChange={e=>setU(e.target.value)} placeholder="username" />
-          <Input value={p} onChange={e=>setP(e.target.value)} type="password" placeholder="password" />
-          {err && <div className="text-red-400 text-sm">{err}</div>}
-          <Button onClick={async ()=>{
-            setErr('');
-            try{ const res = await api.login(u,p); onLogged(res.user); }
-            catch(e){ setErr('Gagal login'); }
-          }}>Masuk</Button>
-        </div>
-      </Card>
-    </div>
-  )
-}
-
 export default function App(){
-  const { user, setUser, ready } = useAuth();
+  const { user, ready, error } = useAuth();
   const { cwd, state, filtered, refresh, q, setQ, sort, dir, reorder } = useFiles();
   const [sel, setSel] = useState(null);
   const [folderName, setFolderName] = useState('');
@@ -124,9 +154,9 @@ export default function App(){
     const p = '/' + parts.slice(0,-1).join('/');
     setSel(null); refresh(p);
   }
-
   if (!ready) return null;
-  if (!user) return <Login onLogged={setUser} />;
+  if (error) return <div className="min-h-screen grid place-content-center text-red-400 text-sm">{error}</div>;
+  if (!user) return null;
 
   return (
     <div className="min-h-screen">
