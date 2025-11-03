@@ -4,8 +4,19 @@ import { Button } from './components/button'
 import { Input } from './components/input'
 import { Card } from './components/card'
 
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+const DATA_BASE = (import.meta.env.VITE_DATA_BASE_URL || API_BASE).replace(/\/$/, '');
+const resolveUrl = (base, url) => {
+  if (!url) return url;
+  if (/^https?:/i.test(url)) return url;
+  const prefix = base ? base : '';
+  const needsSlash = url.startsWith('/') || !prefix;
+  return needsSlash ? `${prefix}${url}` : `${prefix}/${url}`;
+};
+
 const apiFetch = async (url, opts={})=>{
-  const res = await fetch(url, { credentials:'include', ...opts });
+  const target = resolveUrl(API_BASE, url);
+  const res = await fetch(target, { credentials:'include', ...opts });
   if (res.ok) return res;
   let message = res.status === 401 ? 'unauthorized' : 'request failed';
   try {
@@ -27,12 +38,23 @@ const api = {
   login: async (username,password)=> (await apiFetch('/api/auth/login',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({username,password})})).json(),
   guest: async ()=> (await apiFetch('/api/auth/guest',{ method:'POST' })).json(),
   logout: async ()=> (await apiFetch('/api/auth/logout',{ method:'POST'})).json(),
-  list: async (p='/', sort='name', dir='asc' ) => (await apiFetch(`/api/files?path=${encodeURIComponent(p)}&sort=${sort}&dir=${dir}`)).json(),
+  list: async (p='/', sort='name', dir='asc' ) => {
+    const res = await apiFetch(`/api/files?path=${encodeURIComponent(p)}&sort=${sort}&dir=${dir}`);
+    const data = await res.json();
+    if (Array.isArray(data?.items)) {
+      data.items = data.items.map(item => item?.url ? { ...item, url: resolveUrl(DATA_BASE, item.url) } : item);
+    }
+    return data;
+  },
   upload: async (files, folder='/uploads') => {
     const fd = new FormData();
     [...files].forEach(f => fd.append('files', f));
     const res = await apiFetch(`/api/upload?path=${encodeURIComponent(folder)}`, { method:'POST', body: fd });
-    return res.json();
+    const data = await res.json();
+    if (Array.isArray(data?.files)) {
+      data.files = data.files.map(file => file?.url ? { ...file, url: resolveUrl(DATA_BASE, file.url) } : file);
+    }
+    return data;
   },
   mkfolder: async (basePath, name) => {
     const res = await apiFetch(`/api/folder`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ path: basePath, name }) });
