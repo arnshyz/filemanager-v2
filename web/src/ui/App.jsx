@@ -4,8 +4,85 @@ import { Button } from './components/button'
 import { Input } from './components/input'
 import { Card } from './components/card'
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
-const DATA_BASE = (import.meta.env.VITE_DATA_BASE_URL || API_BASE).replace(/\/$/, '');
+const STORAGE_KEYS = {
+  apiBase: 'telefile.apiBase',
+  dataBase: 'telefile.dataBase'
+};
+
+const RUNTIME_CONFIG = (() => {
+  if (typeof window === 'undefined') return { apiBase: '', dataBase: '' };
+  const config = window.__TELEFILE_CONFIG__ || {};
+  const params = new URLSearchParams(window.location.search);
+  const readStored = (key) => {
+    try {
+      const storageKey = STORAGE_KEYS[key];
+      if (!storageKey) return null;
+      const value = window.localStorage?.getItem(storageKey);
+      return value === null ? null : value;
+    } catch {
+      return null;
+    }
+  };
+  const writeStored = (key, value) => {
+    try {
+      const storageKey = STORAGE_KEYS[key];
+      if (!storageKey) return;
+      const trimmed = (value || '').trim();
+      if (trimmed) window.localStorage?.setItem(storageKey, trimmed);
+      else window.localStorage?.removeItem(storageKey);
+    } catch {}
+  };
+  const resolve = (key, configKey, envValue) => {
+    let value = null;
+    if (params.has(key)) {
+      value = params.get(key) || '';
+      writeStored(key, value);
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete(key);
+        window.history.replaceState({}, '', url);
+      } catch {}
+    } else {
+      value = readStored(key);
+    }
+    if (value === null || value === undefined) value = config?.[configKey] ?? null;
+    if (value === null || value === undefined || value === '') value = envValue ?? '';
+    return (value || '').trim();
+  };
+  const apiBase = resolve('apiBase', 'apiBaseUrl', import.meta.env.VITE_API_BASE_URL);
+  let dataBase = resolve('dataBase', 'dataBaseUrl', import.meta.env.VITE_DATA_BASE_URL);
+  if (!dataBase) dataBase = apiBase;
+  return { apiBase, dataBase };
+})();
+
+const trimTrailingSlash = (value='') => value.replace(/\/+$/, '');
+const API_BASE = trimTrailingSlash(RUNTIME_CONFIG.apiBase);
+const DATA_BASE = trimTrailingSlash(RUNTIME_CONFIG.dataBase || API_BASE);
+
+const persistRuntimeConfig = (updates) => {
+  if (typeof window === 'undefined') return;
+  try {
+    const url = new URL(window.location.href);
+    Object.entries(updates).forEach(([key, value]) => {
+      const storageKey = STORAGE_KEYS[key];
+      if (!storageKey) return;
+      const trimmed = (value || '').trim();
+      try {
+        if (trimmed) window.localStorage?.setItem(storageKey, trimmed);
+        else window.localStorage?.removeItem(storageKey);
+      } catch {}
+      if (trimmed) url.searchParams.set(key, trimmed);
+      else url.searchParams.delete(key);
+    });
+    window.history.replaceState({}, '', url);
+  } catch {}
+};
+
+const applyRuntimeConfig = (updates) => {
+  if (typeof window === 'undefined') return;
+  persistRuntimeConfig(updates);
+  window.location.reload();
+};
 const resolveUrl = (base, url) => {
   if (!url) return url;
   if (/^https?:/i.test(url)) return url;
@@ -71,9 +148,64 @@ const api = {
 function useAuth(){
   const [user,setUser] = useState(null);
   const [ready,setReady] = useState(false);
-  useEffect(()=>{ api.me().then(d=>{ setUser(d.user); setReady(true) }).catch(()=> setReady(true)); },[]);
-  return { user, setUser, ready };
+  const [error,setError] = useState('');
+  useEffect(()=>{
+    let cancelled = false;
+    (async ()=>{
+      try {
+        const data = await api.me();
+        if (!cancelled) setUser(data.user);
+      } catch (err) {
+        try {
+          const guest = await api.guest();
+          if (!cancelled) setUser(guest.user);
+        } catch (guestErr) {
+          if (!cancelled) setError(guestErr?.message || 'Tidak dapat masuk.');
+        }
+      } finally {
+        if (!cancelled) setReady(true);
+      }
+    })();
+    return ()=>{ cancelled = true };
+  },[]);
+  return { user, ready, error };
 }
+
+const ErrorState = ({ message }) => {
+  const [apiBaseValue, setApiBaseValue] = useState(RUNTIME_CONFIG.apiBase || '');
+  const [dataBaseValue, setDataBaseValue] = useState(RUNTIME_CONFIG.dataBase || '');
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-6">
+      <Card className="max-w-lg w-full space-y-4">
+        <div>
+          <div className="text-lg font-semibold mb-1">Tidak dapat terhubung</div>
+          <p className="text-sm text-neutral-400">{message || 'Terjadi kesalahan saat menghubungi server.'}</p>
+        </div>
+        <div className="space-y-2 text-sm text-neutral-300">
+          <p>Pastikan backend berjalan dan endpoint <code>/api/health</code> dapat diakses.</p>
+          <p>Bila frontend dan backend berada di host berbeda, isi URL backend di bawah lalu muat ulang.</p>
+        </div>
+        <div className="space-y-2">
+          <label className="block text-xs font-semibold uppercase tracking-wide text-neutral-500">API Base URL</label>
+          <Input placeholder="https://backend.example.com" value={apiBaseValue} onChange={e=>setApiBaseValue(e.target.value)} />
+        </div>
+        <div className="space-y-2">
+          <label className="block text-xs font-semibold uppercase tracking-wide text-neutral-500">Data Base URL (opsional)</label>
+          <Input placeholder="Kosongkan untuk mengikuti API" value={dataBaseValue} onChange={e=>setDataBaseValue(e.target.value)} />
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={()=>applyRuntimeConfig({ apiBase: '', dataBase: '' })}>Reset</Button>
+          <Button onClick={()=>applyRuntimeConfig({ apiBase: apiBaseValue, dataBase: dataBaseValue })}>Simpan &amp; muat ulang</Button>
+        </div>
+        <div className="text-xs text-neutral-500 space-y-1">
+          <p>Pengaturan ini disimpan di <code>localStorage</code> dan juga dapat diubah melalui <code>web/public/config.js</code>.</p>
+          <p>Alternatif cepat: tambahkan query <code>?apiBase=https://backend.example.com</code> pada URL.</p>
+        </div>
+      </Card>
+    </div>
+  );
+};
 
 const FileIcon = ({mime,isDir}) => {
   if (isDir) return <span>📁</span>
@@ -118,49 +250,8 @@ const Preview = ({file}) => {
   return <a className="btn btn-primary inline-block" href={url} download>Download</a>
 }
 
-function Login({onLogged}){
-  const [u,setU] = useState('admin');
-  const [p,setP] = useState('admin12345');
-  const [err,setErr] = useState('');
-  return (
-    <div className="min-h-screen grid place-content-center">
-      <Card className="w-[380px]">
-        <div className="text-xl font-bold mb-2">Masuk</div>
-        <div className="text-sm text-neutral-400 mb-4">Gunakan kredensial admin dari .env</div>
-        <div className="space-y-3">
-          <Input value={u} onChange={e=>setU(e.target.value)} placeholder="username" />
-          <Input value={p} onChange={e=>setP(e.target.value)} type="password" placeholder="password" />
-          {err && <div className="text-red-400 text-sm">{err}</div>}
-          <Button onClick={async ()=>{
-            setErr('');
-            try{
-              const res = await api.login(u,p);
-              onLogged(res.user);
-            }
-            catch(e){
-              const msg = (e?.status === 401 || e?.message === 'unauthorized') ? 'Kredensial salah' : (e?.message || 'Gagal login');
-              setErr(msg);
-            }
-          }}>Masuk</Button>
-          <Button variant="ghost" onClick={async ()=>{
-            setErr('');
-            try{
-              const res = await api.guest();
-              onLogged(res.user);
-            }
-            catch(e){
-              const msg = (e?.message && e.message !== 'unauthorized') ? e.message : 'Tidak dapat masuk sebagai tamu';
-              setErr(msg);
-            }
-          }}>Masuk sebagai Tamu</Button>
-        </div>
-      </Card>
-    </div>
-  )
-}
-
 export default function App(){
-  const { user, setUser, ready } = useAuth();
+  const { user, ready, error } = useAuth();
   const { cwd, state, filtered, refresh, q, setQ, sort, dir, reorder } = useFiles();
   const [sel, setSel] = useState(null);
   const [folderName, setFolderName] = useState('');
@@ -176,9 +267,9 @@ export default function App(){
     const p = '/' + parts.slice(0,-1).join('/');
     setSel(null); refresh(p);
   }
-
   if (!ready) return null;
-  if (!user) return <Login onLogged={setUser} />;
+  if (error) return <ErrorState message={error} />;
+  if (!user) return null;
 
   return (
     <div className="min-h-screen">
@@ -225,7 +316,13 @@ export default function App(){
                   <td>{new Date(it.mtime).toLocaleString()}</td>
                   <td className="space-x-2">
                     {!it.isDir && <a className="text-sm underline" href={it.url} target="_blank">Buka</a>}
-                    {!it.isDir && <button className="text-sm underline" onClick={()=>navigator.clipboard.writeText(location.origin+it.url)}>Copy link</button>}
+                    {!it.isDir && <button className="text-sm underline" onClick={()=>{
+                      const target = (() => {
+                        try { return new URL(it.url, window.location.origin).toString(); }
+                        catch { return it.url; }
+                      })();
+                      navigator.clipboard.writeText(target);
+                    }}>Copy link</button>}
                     <button className="text-sm underline" onClick={async ()=>{
                       const to = (cwd.endsWith('/')?cwd:cwd+'/') + prompt('Nama baru:', it.name);
                       if (!to) return;
